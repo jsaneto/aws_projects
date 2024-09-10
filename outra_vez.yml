@@ -1,0 +1,183 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Resources:
+  # Tabela DynamoDB
+  PowerOfLogTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: poweroflog
+      AttributeDefinitions:
+        - AttributeName: ID
+          AttributeType: S
+      KeySchema:
+        - AttributeName: ID
+          KeyType: HASH
+      ProvisionedThroughput:
+        ReadCapacityUnits: 5
+        WriteCapacityUnits: 5
+      BillingMode: PROVISIONED
+
+  # Role IAM para Lambda
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: LambdaDynamoDBExecutionRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: LambdaDynamoDBPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:GetItem
+                  - dynamodb:Scan
+                  - dynamodb:Query
+                  - dynamodb:UpdateItem
+                Resource: !GetAtt PowerOfLogTable.Arn
+
+  # Função Lambda
+  PowerOfLogFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: powerOfLogFunction
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Code:
+        ZipFile: |
+          import json
+          import math
+          import boto3
+          from time import gmtime, strftime
+
+          dynamodb = boto3.resource('dynamodb')
+          table = dynamodb.Table('poweroflog')
+          now = strftime("%a, %d %b %Y %H:%M:%S +0000", gmtime())
+
+          def lambda_handler(event, context):
+              mathResult = math.log(float(event['argument']), float(event['base']))
+              response = table.put_item(
+                  Item={
+                      'ID': str(mathResult),
+                      'argument': str(event['argument']),
+                      'base': str(event['base']),
+                      'LatestGreetingTime': now
+                  })
+              return {
+                  'statusCode': 200,
+                  'body': json.dumps('Your result is ' + str(mathResult))
+              }
+      Runtime: python3.8
+
+  # API Gateway
+  PowerOfLogApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: PowerOfLogApi
+      Description: API Gateway for Lambda function
+
+  # Recurso da API Gateway
+  PowerOfLogResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: !GetAtt PowerOfLogApi.RootResourceId
+      PathPart: calculate
+      RestApiId: !Ref PowerOfLogApi
+
+# Método POST da API Gateway
+  PowerOfLogMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      AuthorizationType: NONE
+      HttpMethod: POST
+      ResourceId: !Ref PowerOfLogResource
+      RestApiId: !Ref PowerOfLogApi
+      Integration:
+        IntegrationHttpMethod: POST
+        Type: AWS
+        Uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${PowerOfLogFunction.Arn}/invocations
+        RequestTemplates:
+          application/json: |
+            {
+              "argument": "$input.path('$.argument')",
+              "base": "$input.path('$.base')"
+            }
+        IntegrationResponses:
+          - StatusCode: 200
+            SelectionPattern: ""
+            ResponseTemplates:
+              application/json: |
+                #set($inputRoot = $input.path('$.body'))
+                $inputRoot
+            ResponseParameters:
+              method.response.header.Content-Type: "'application/json'"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseModels:
+            application/json: "Empty"
+          ResponseParameters:
+            method.response.header.Content-Type: false
+
+  # Configuração do CORS para o recurso da API Gateway
+  PowerOfLogMethodOptions:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      AuthorizationType: NONE
+      HttpMethod: OPTIONS
+      ResourceId: !Ref PowerOfLogResource
+      RestApiId: !Ref PowerOfLogApi
+      Integration:
+        IntegrationHttpMethod: OPTIONS
+        Type: MOCK
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'*'"
+              method.response.header.Access-Control-Allow-Methods: "'OPTIONS,POST'"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+
+  # Permissão para o API Gateway invocar a função Lambda
+  LambdaApiGatewayInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref PowerOfLogFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${PowerOfLogApi}/*/*/*
+
+  # Implantação da API Gateway
+  PowerOfLogDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn: PowerOfLogMethod
+    Properties:
+      RestApiId: !Ref PowerOfLogApi
+      StageName: prod
+
+  # Configuração do estágio da API Gateway
+  PowerOfLogStage:
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      DeploymentId: !Ref PowerOfLogDeployment
+      RestApiId: !Ref PowerOfLogApi
+      StageName: produto12313421
+      Description: "Stage para a API de potência de log"
+
+Outputs:
+  ApiUrl:
+    Description: URL para a API Gateway
+    Value: !Sub https://${PowerOfLogApi}.execute-api.${AWS::Region}.amazonaws.com/prod/calculate
