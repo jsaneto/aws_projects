@@ -166,7 +166,7 @@ Resources:
     DependsOn: PowerOfLogMethod
     Properties:
       RestApiId: !Ref PowerOfLogApi
-      StageName: prod
+      StageName: dev
 
   # Configuração do estágio da API Gateway
   PowerOfLogStage:
@@ -174,7 +174,7 @@ Resources:
     Properties:
       DeploymentId: !Ref PowerOfLogDeployment
       RestApiId: !Ref PowerOfLogApi
-      StageName: produto12313421
+      StageName: prod
       Description: "Stage para a API de potência de log"
 
 Outputs:
